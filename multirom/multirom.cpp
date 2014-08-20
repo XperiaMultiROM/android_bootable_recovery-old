@@ -1454,6 +1454,8 @@ bool MultiROM::injectBootDeprecated(std::string img_path, bool only_if_older)
 	system("mkdir /tmp/boot/rd");
 
 	rd_cmpr = decompressRamdisk("/tmp/boot/initrd.img", "/tmp/boot/rd/");
+	system("mkdir /tmp/boot/rd/sbin/rd2");
+	system("cd /tmp/boot/rd/sbin/rd2 && cat ../ramdisk.cpio | cpio -i");
 	if(rd_cmpr == -1 || access("/tmp/boot/rd/init", F_OK) < 0)
 	{
 		gui_print("Failed to decompress ramdisk!\n");
@@ -1462,7 +1464,7 @@ bool MultiROM::injectBootDeprecated(std::string img_path, bool only_if_older)
 
 	if(only_if_older)
 	{
-		int tr_rd_ver = getTrampolineVersion("/tmp/boot/rd/init", true);
+		int tr_rd_ver = getTrampolineVersion("/tmp/boot/rd/sbin/rd2/init", true);
 		int tr_my_ver = getTrampolineVersion();
 		if(tr_rd_ver >= tr_my_ver && tr_my_ver > 0)
 		{
@@ -1475,20 +1477,24 @@ bool MultiROM::injectBootDeprecated(std::string img_path, bool only_if_older)
 
 	// COPY TRAMPOLINE
 	gui_print("Copying trampoline...\n");
-	if(access("/tmp/boot/rd/main_init", F_OK) < 0)
-		system("mv /tmp/boot/rd/init /tmp/boot/rd/main_init");
+	if(access("/tmp/boot/rd/sbin/rd2/main_init", F_OK) < 0)
+		system("mv /tmp/boot/rd/sbin/rd2/init /tmp/boot/rd/sbin/rd2/main_init");
 
-	system_args("cp \"%s\" /tmp/boot/rd/init", path_trampoline.c_str());
-	system("chmod 750 /tmp/boot/rd/init");
-	system("ln -sf ../main_init /tmp/boot/rd/sbin/ueventd");
-	system("ln -sf ../main_init /tmp/boot/rd/sbin/watchdogd");
+	system_args("cp \"%s\" /tmp/boot/rd/sbin/rd2/init", path_trampoline.c_str());
+	system("chmod 750 /tmp/boot/rd/sbin/rd2/init");
+	system("ln -sf ../main_init /tmp/boot/rd/sbin/rd2/sbin/ueventd");
+	system("ln -sf ../main_init /tmp/boot/rd/sbin/rd2/sbin/watchdogd");
 
 #ifdef MR_USE_MROM_FSTAB
 	system_args("cp \"%s/mrom.fstab\" /tmp/boot/rd/mrom.fstab", m_path.c_str());
+	system_args("cp \"%s/mrom.fstab\" /tmp/boot/rd/sbin/rd2/mrom.fstab", m_path.c_str());
+
 #endif
 
 	// COMPRESS RAMDISK
 	gui_print("Compressing ramdisk...\n");
+	system("cd /tmp/boot/rd/sbin/rd2 && find . | cpio -o -H newc > ../ramdisk.cpio");
+	system("rm -r /tmp/boot/rd/sbin/rd2");
 	if(!compressRamdisk("/tmp/boot/rd", "/tmp/boot/initrd.img", rd_cmpr))
 		goto fail;
 
