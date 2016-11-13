@@ -483,16 +483,33 @@ bool MultiROM::restorecon(std::string name)
 	bool res = false;
 	bool replaced_contexts = false;
 
-	std::string file_contexts = getRomsPath() + name;
+	std::string file_contexts_name = "file_contexts";
+	std::string file_contexts_N_name = "file_contexts.bin";
+	std::string file_contexts_used_name = "";
+	std::string file_contexts = getRomsPath() + name + "/boot/" + file_contexts_name;
+	std::string file_contexts_N = getRomsPath() + name + "/boot/" + file_contexts_N_name;
+	std::string file_contexts_used = "";
 	std::string seapp_contexts = file_contexts + "/boot/seapp_contexts";
-	file_contexts += "/boot/file_contexts";
+
 
 	if(access(file_contexts.c_str(), R_OK) >= 0)
 	{
+		file_contexts_used = file_contexts;
+		file_contexts_used_name = file_contexts_name;
+	} else if(access(file_contexts_N.c_str(), R_OK) >= 0)
+	{
+		file_contexts_used = file_contexts_N;
+		file_contexts_used_name = file_contexts_N_name;
+	}
+	gui_print("Using file context: %s.\n", file_contexts_used_name.c_str());
+	gui_print("Path: %s\n", file_contexts_used.c_str());
+
+	if(file_contexts_used != "")
+	{
 		gui_print("Using ROM's file_contexts\n");
-		rename("/file_contexts", "/file_contexts.orig");
+		rename(file_contexts_used_name.c_str(), "/file_contexts.orig");
 		rename("/seapp_contexts", "/seapp_contexts.orig");
-		system_args("cp -a \"%s\" /file_contexts", file_contexts.c_str());
+		system_args("cp -a \"%s\" /%s", file_contexts.c_str(), file_contexts_used_name.c_str());
 		system_args("cp -a \"%s\" /seapp_contexts", seapp_contexts.c_str());
 		replaced_contexts = true;
 	}
@@ -516,7 +533,7 @@ bool MultiROM::restorecon(std::string name)
 	res = true;
 exit:
 	if(replaced_contexts) {
-		rename("/file_contexts.orig", "/file_contexts");
+		rename("/file_contexts.orig", std::string("/" + file_contexts_used_name).c_str());
 		rename("/seapp_contexts.orig", "/seapp_contexts");
 	}
 	return res;
@@ -1845,7 +1862,8 @@ bool MultiROM::extractBootForROM(std::string base)
 	static const char *cp_f[] = {
 		"*.rc", "default.prop", "init", "main_init", "fstab.*",
 		// Since Android 4.3 - for SELinux
-		"file_contexts", "property_contexts", "seapp_contexts", "sepolicy",
+		"file_contexts*", "property_contexts", "seapp_contexts", "selinux_version",
+		"sepolicy", "service_contexts",
 		NULL
 	};
 
@@ -1856,6 +1874,8 @@ bool MultiROM::extractBootForROM(std::string base)
 	sprintf(path, "%s/boot/main_init", base.c_str());
 	if(access(path, F_OK) < 0)
 		system_args("mv \"%s/boot/init\" \"%s/boot/main_init\"", base.c_str(), base.c_str());
+
+	system_args("sed -i -e 's/restorecon_recursive \/data/#restorecon_recursive \/data/g' %s/boot/init.rc", base.c_str());
 
 	system("rm -r /tmp/boot");
 	system_args("cd \"%s/boot\" && rm cmdline ramdisk.gz zImage", base.c_str());
