@@ -316,7 +316,7 @@ bool MultiROM::setRomsPath(std::string loc)
 		return true;
 	}
 	*/
-	
+
 	// legacy 'loc' style for easier merges
 	loc = partition->Actual_Block_Device + " (" + partition->Current_File_System + ")";
 
@@ -1875,7 +1875,12 @@ bool MultiROM::extractBootForROM(std::string base)
 	if(access(path, F_OK) < 0)
 		system_args("mv \"%s/boot/init\" \"%s/boot/main_init\"", base.c_str(), base.c_str());
 
-	system_args("sed -i -e 's/restorecon_recursive \/data/#restorecon_recursive \/data/g' %s/boot/init.rc", base.c_str());
+	// Prevent modification of all SELinux contexts of the data partition (would modify secondary /system partitions).
+	system_args("sed -i -e 's/restorecon_recursive \\/data/#restorecon_recursive \\/data/g' %s/boot/init.rc", base.c_str());
+
+	// Prevent mounting the apps_log partition to /misc that would prevent primary sony stock roms from booting again.
+	system_args("sed -i -e 's/\\/dev\\/block\\/bootdevice\\/by-name\\/apps_log.*\\/misc/#\\/dev\\/block\\/bootdevice\\/by-name\\/apps_log\\1\\/misc/g' %s/boot/fstab.*",
+			base.c_str());
 
 	system("rm -r /tmp/boot");
 	system_args("cd \"%s/boot\" && rm cmdline ramdisk.gz zImage", base.c_str());
