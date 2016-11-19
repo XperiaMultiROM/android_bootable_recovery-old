@@ -316,7 +316,7 @@ bool MultiROM::setRomsPath(std::string loc)
 		return true;
 	}
 	*/
-	
+
 	// legacy 'loc' style for easier merges
 	loc = partition->Actual_Block_Device + " (" + partition->Current_File_System + ")";
 
@@ -1454,6 +1454,8 @@ bool MultiROM::injectBootDeprecated(std::string img_path, bool only_if_older)
 	system("mkdir /tmp/boot/rd");
 
 	rd_cmpr = decompressRamdisk("/tmp/boot/initrd.img", "/tmp/boot/rd/");
+	system("mkdir /tmp/boot/rd/sbin/rd2");
+	system("cd /tmp/boot/rd/sbin/rd2 && cat ../ramdisk.cpio | cpio -i");
 	if(rd_cmpr == -1 || access("/tmp/boot/rd/init", F_OK) < 0)
 	{
 		gui_print("Failed to decompress ramdisk!\n");
@@ -1462,7 +1464,7 @@ bool MultiROM::injectBootDeprecated(std::string img_path, bool only_if_older)
 
 	if(only_if_older)
 	{
-		int tr_rd_ver = getTrampolineVersion("/tmp/boot/rd/init", true);
+		int tr_rd_ver = getTrampolineVersion("/tmp/boot/rd/sbin/rd2/init", true);
 		int tr_my_ver = getTrampolineVersion();
 		if(tr_rd_ver >= tr_my_ver && tr_my_ver > 0)
 		{
@@ -1475,20 +1477,24 @@ bool MultiROM::injectBootDeprecated(std::string img_path, bool only_if_older)
 
 	// COPY TRAMPOLINE
 	gui_print("Copying trampoline...\n");
-	if(access("/tmp/boot/rd/main_init", F_OK) < 0)
-		system("mv /tmp/boot/rd/init /tmp/boot/rd/main_init");
+	if(access("/tmp/boot/rd/sbin/rd2/main_init", F_OK) < 0)
+		system("mv /tmp/boot/rd/sbin/rd2/init /tmp/boot/rd/sbin/rd2/main_init");
 
-	system_args("cp \"%s\" /tmp/boot/rd/init", path_trampoline.c_str());
-	system("chmod 750 /tmp/boot/rd/init");
-	system("ln -sf ../main_init /tmp/boot/rd/sbin/ueventd");
-	system("ln -sf ../main_init /tmp/boot/rd/sbin/watchdogd");
+	system_args("cp \"%s\" /tmp/boot/rd/sbin/rd2/init", path_trampoline.c_str());
+	system("chmod 750 /tmp/boot/rd/sbin/rd2/init");
+	system("ln -sf ../main_init /tmp/boot/rd/sbin/rd2/sbin/ueventd");
+	system("ln -sf ../main_init /tmp/boot/rd/sbin/rd2/sbin/watchdogd");
 
 #ifdef MR_USE_MROM_FSTAB
 	system_args("cp \"%s/mrom.fstab\" /tmp/boot/rd/mrom.fstab", m_path.c_str());
+	system_args("cp \"%s/mrom.fstab\" /tmp/boot/rd/sbin/rd2/mrom.fstab", m_path.c_str());
+
 #endif
 
 	// COMPRESS RAMDISK
 	gui_print("Compressing ramdisk...\n");
+	system("cd /tmp/boot/rd/sbin/rd2 && find . | cpio -o -H newc > ../ramdisk.cpio");
+	system("rm -r /tmp/boot/rd/sbin/rd2");
 	if(!compressRamdisk("/tmp/boot/rd", "/tmp/boot/initrd.img", rd_cmpr))
 		goto fail;
 
@@ -1828,6 +1834,7 @@ bool MultiROM::createDirs(std::string name, int type)
 bool MultiROM::extractBootForROM(std::string base)
 {
 	char path[256];
+	std::string rd_path = std::string("/tmp/boot");
 	struct bootimg img;
 
 	gui_print("Extracting contents of boot.img...\n");
@@ -1851,8 +1858,29 @@ bool MultiROM::extractBootForROM(std::string base)
 	system("mkdir /tmp/boot");
 
 	struct stat stat_buffer;
-	int rd_cmpr = decompressRamdisk((base + "/boot/initrd.img").c_str(), "/tmp/boot");
-	if(rd_cmpr == -1 || lstat("/tmp/boot/init", &stat_buffer) < 0)
+	int rd_cmpr = decompressRamdisk((base + "/boot/initrd.img").c_str(), rd_path.c_str());
+
+	// Check for embedded ramdisk & handle if present.
+	std::string sec_rd = rd_path + std::string("/sbin/ramdisk.cpio");
+	if(rd_cmpr != -1 && lstat(sec_rd.c_str(), &stat_buffer) >= 0)
+	{
+		gui_print("Extracting secondary ramdisk...\n");
+
+		std::string rd_path_sec = std::string("/tmp/boot_sec");
+		system((std::string("rm -r ") + rd_path_sec).c_str());
+		system((std::string("mkdir ") + rd_path_sec).c_str());
+
+		// Extract embedded ramdisk.
+		// e.g., cd "/tmp/boot_sec" && cpio -i < /tmp/boot/sbin/ramdisk
+		std::string cmd = std::string("cd \"") + rd_path_sec + std::string("\" && cpio -i ")
+				+ std::string(" < ") + sec_rd;
+		system(cmd.c_str());
+
+		rd_path = rd_path_sec;
+	}
+
+	std::string init_path = rd_path + std::string("/init");
+	if(rd_cmpr == -1 || lstat(init_path.c_str(), &stat_buffer) < 0)
 	{
 		gui_print("Failed to extract ramdisk!\n");
 		return false;
@@ -1868,16 +1896,21 @@ bool MultiROM::extractBootForROM(std::string base)
 	};
 
 	for(int i = 0; cp_f[i]; ++i)
-		system_args("cp -a /tmp/boot/%s \"%s/boot/\"", cp_f[i], base.c_str());
+		system_args("cp -a %s/%s \"%s/boot/\"", rd_path.c_str(), cp_f[i], base.c_str());
 
 	// check if main_init exists
 	sprintf(path, "%s/boot/main_init", base.c_str());
 	if(access(path, F_OK) < 0)
 		system_args("mv \"%s/boot/init\" \"%s/boot/main_init\"", base.c_str(), base.c_str());
 
-	system_args("sed -i -e 's/restorecon_recursive \/data/#restorecon_recursive \/data/g' %s/boot/init.rc", base.c_str());
+	// Prevent modification of all SELinux contexts of the data partition (would modify secondary /system partitions).
+	system_args("sed -i -e 's/restorecon_recursive \\/data/#restorecon_recursive \\/data/g' %s/boot/init.rc", base.c_str());
 
-	system("rm -r /tmp/boot");
+	// Prevent mounting the apps_log partition to /misc that would prevent primary sony stock roms from booting again.
+	system_args("sed -i -e 's/\\/dev\\/block\\/bootdevice\\/by-name\\/apps_log.*\\/misc/#\\/dev\\/block\\/bootdevice\\/by-name\\/apps_log\\1\\/misc/g' %s/boot/fstab.*",
+			base.c_str());
+
+	//system((std::string("rm -r ") +  rd_path).c_str());
 	system_args("cd \"%s/boot\" && rm cmdline ramdisk.gz zImage", base.c_str());
 
 	if (DataManager::GetIntValue("tw_multirom_share_kernel") == 0)
