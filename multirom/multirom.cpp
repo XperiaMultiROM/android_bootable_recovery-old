@@ -1834,6 +1834,7 @@ bool MultiROM::createDirs(std::string name, int type)
 bool MultiROM::extractBootForROM(std::string base)
 {
 	char path[256];
+	std::string rd_path = std::string("/tmp/boot");
 	struct bootimg img;
 
 	gui_print("Extracting contents of boot.img...\n");
@@ -1857,8 +1858,29 @@ bool MultiROM::extractBootForROM(std::string base)
 	system("mkdir /tmp/boot");
 
 	struct stat stat_buffer;
-	int rd_cmpr = decompressRamdisk((base + "/boot/initrd.img").c_str(), "/tmp/boot");
-	if(rd_cmpr == -1 || lstat("/tmp/boot/init", &stat_buffer) < 0)
+	int rd_cmpr = decompressRamdisk((base + "/boot/initrd.img").c_str(), rd_path.c_str());
+
+	// Check for embedded ramdisk & handle if present.
+	std::string sec_rd = rd_path + std::string("/sbin/ramdisk.cpio");
+	if(rd_cmpr != -1 && lstat(sec_rd.c_str(), &stat_buffer) >= 0)
+	{
+		gui_print("Extracting secondary ramdisk...\n");
+
+		std::string rd_path_sec = std::string("/tmp/boot_sec");
+		system((std::string("rm -r ") + rd_path_sec).c_str());
+		system((std::string("mkdir ") + rd_path_sec).c_str());
+
+		// Extract embedded ramdisk.
+		// e.g., cd "/tmp/boot_sec" && cpio -i < /tmp/boot/sbin/ramdisk
+		std::string cmd = std::string("cd \"") + rd_path_sec + std::string("\" && cpio -i ")
+				+ std::string(" < ") + sec_rd;
+		system(cmd.c_str());
+
+		rd_path = rd_path_sec;
+	}
+
+	std::string init_path = rd_path + std::string("/init");
+	if(rd_cmpr == -1 || lstat(init_path.c_str(), &stat_buffer) < 0)
 	{
 		gui_print("Failed to extract ramdisk!\n");
 		return false;
@@ -1874,7 +1896,7 @@ bool MultiROM::extractBootForROM(std::string base)
 	};
 
 	for(int i = 0; cp_f[i]; ++i)
-		system_args("cp -a /tmp/boot/%s \"%s/boot/\"", cp_f[i], base.c_str());
+		system_args("cp -a %s/%s \"%s/boot/\"", rd_path.c_str(), cp_f[i], base.c_str());
 
 	// check if main_init exists
 	sprintf(path, "%s/boot/main_init", base.c_str());
@@ -1888,7 +1910,7 @@ bool MultiROM::extractBootForROM(std::string base)
 	system_args("sed -i -e 's/\\/dev\\/block\\/bootdevice\\/by-name\\/apps_log.*\\/misc/#\\/dev\\/block\\/bootdevice\\/by-name\\/apps_log\\1\\/misc/g' %s/boot/fstab.*",
 			base.c_str());
 
-	system("rm -r /tmp/boot");
+	//system((std::string("rm -r ") +  rd_path).c_str());
 	system_args("cd \"%s/boot\" && rm cmdline ramdisk.gz zImage", base.c_str());
 
 	if (DataManager::GetIntValue("tw_multirom_share_kernel") == 0)
